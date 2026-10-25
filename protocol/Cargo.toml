@@ -1,0 +1,12 @@
+[package]
+name = "lt-emu-protocol"
+description = "The plain-data pipe protocol between an application and lt-emu-host (a PS1 emulator host)"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/pixalynx/lt-emu-host"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", features = ["alloc"] }

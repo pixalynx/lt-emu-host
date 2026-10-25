@@ -1,0 +1,10 @@
+# lt-emu-host: a PS1 emulator host program (PSoXide behind a small pipe protocol), and that
+# protocol. Its own workspace, so it builds, and can be published, apart from Living Tool.
+[workspace]
+resolver = "2"
+members = ["protocol", "host"]
+
+[profile.release]
+# The core is the hot path: a frame is ~3.5 ms optimised and several times that without.
+opt-level = 3
+debug = 1

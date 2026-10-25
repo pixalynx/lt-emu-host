@@ -1,0 +1,30 @@
+[package]
+name = "lt-emu-host"
+description = "A PlayStation emulator host program: PSoXide's core driven over a plain-data pipe protocol"
+version = "0.1.0"
+edition = "2021"
+# PSoXide is GPL-2.0-or-later; this program links it, so it is GPL too.
+license = "GPL-3.0-or-later"
+repository = "https://github.com/pixalynx/lt-emu-host"
+publish = false
+
+[dependencies]
+lt-emu-protocol = { path = "../protocol" }
+# https://github.com/EBonura/PSoXide-emulator at d4d8006 (2026-10-24). Pinned by rev: the core is
+# pre-1.0 with one maintainer and daily commits, and machine states only load into the same build.
+emulator-core = { git = "https://github.com/EBonura/PSoXide-emulator", rev = "d4d8006ebe3c945ed4a568ae7ef77e9fc0a5028e" }
+psx-iso = { git = "https://github.com/EBonura/PSoXide-emulator", rev = "d4d8006ebe3c945ed4a568ae7ef77e9fc0a5028e" }
+# Machine states: the core's own serde layout, encoded as PSoXide's save states are.
+postcard = { version = "1", features = ["alloc"] }
+# Sound out (CoreAudio, WASAPI, ALSA: Linux builds need libasound2-dev). 0.15 is what PSoXide's frontend uses.
+cpal = "0.15"
+# The lock-free queue between the emulator thread and the audio callback.
+ringbuf = "0.4"
+
+[target.'cfg(unix)'.dependencies]
+# The protocol's own copy of stdout (main.rs), and on macOS the emulator thread's QoS class.
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# The protocol's own copy of stdout (main.rs).
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console"] }

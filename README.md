@@ -15,11 +15,20 @@ shows the pictures it sends back. The program itself knows nothing about Living 
 |---|---|---|
 | `host/` | The program: PSoXide's core, the disc (a raw image with patched sectors over it), the real-time loop, sound out (cpal), the pipe | GPL-3.0-or-later ([LICENSE](LICENSE)) |
 | `protocol/` | `lt-emu-protocol`: the messages and their framing, shared by the program and its applications | MIT ([protocol/LICENSE](protocol/LICENSE)) |
+| `hooks/` | `lt-emu-hooks`: code hooks on the core's CPU, a table of code addresses where a run stops so a handler can read the game, then let the original run or return in its place | GPL-3.0-or-later |
 
-The core is PSoXide's `emulator-core` and `psx-iso`, GPL-2.0-or-later, pinned at
+The core is PSoXide's `emulator-core` and `psx-iso`, GPL-2.0-or-later, at
 [`d4d8006`](https://github.com/EBonura/PSoXide-emulator/tree/d4d8006ebe3c945ed4a568ae7ef77e9fc0a5028e)
-(2026-10-24). Machine states only load into the core build that saved them, so the rev only moves
-deliberately.
+(2026-10-24) plus one commit, built from the fork
+[`pixalynx/PSoXide-emulator`](https://github.com/pixalynx/PSoXide-emulator/tree/lt-code-hooks)
+at [`b27fff9`](https://github.com/pixalynx/PSoXide-emulator/commit/b27fff97dc9b265d776fb031ca0c920c0f243f95). Machine states only load
+into the core build that saved them, so the rev only moves deliberately.
+
+The added commit is `Cpu::set_code_hooks`, which `hooks/` uses: `Cpu::run` stops in front of a
+hooked code address, and no decoded block starts on or holds one, so everything else still runs
+batched. Without hooks set the core runs as d4d8006 does. The hooks are host configuration that
+machine states leave out, so states load the same either way, and the core name stays
+`psoxide-d4d8006`.
 
 ## Source
 
@@ -36,6 +45,14 @@ target/release/lt-emu-host --version
 ```
 
 The toolchain is pinned in `rust-toolchain.toml`. Linux needs `libasound2-dev` (sound).
+
+`hooks/examples/hooks_check.rs` checks the hooks on a Guardian's Crusade disc: a machine with
+observe hooks against one without, compared after every frame, and a replace hook that drops the
+field's terrain:
+
+```sh
+cargo run --release -p lt-emu-hooks --example hooks_check -- <disc.bin> <out dir> [identity|replace|all] [frames]
+```
 
 ## The protocol
 

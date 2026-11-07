@@ -10,10 +10,13 @@ publish = false
 
 [dependencies]
 lt-emu-protocol = { path = "../protocol" }
-# https://github.com/EBonura/PSoXide-emulator at d4d8006 (2026-10-24). Pinned by rev: the core is
-# pre-1.0 with one maintainer and daily commits, and machine states only load into the same build.
-emulator-core = { git = "https://github.com/EBonura/PSoXide-emulator", rev = "d4d8006ebe3c945ed4a568ae7ef77e9fc0a5028e" }
-psx-iso = { git = "https://github.com/EBonura/PSoXide-emulator", rev = "d4d8006ebe3c945ed4a568ae7ef77e9fc0a5028e" }
+# PSoXide (https://github.com/EBonura/PSoXide-emulator) at d4d8006 (2026-10-24), plus Living Tool's
+# code-hook commit (`Cpu::set_code_hooks`, for `hooks/`), from the fork
+# https://github.com/pixalynx/PSoXide-emulator branch `lt-code-hooks`. Without hooks set the core
+# runs as d4d8006 does, and machine states are the same. Pinned by rev: the core is pre-1.0 with
+# one maintainer and daily commits, and machine states only load into the same build.
+emulator-core = { git = "https://github.com/pixalynx/PSoXide-emulator", rev = "b27fff97dc9b265d776fb031ca0c920c0f243f95" }
+psx-iso = { git = "https://github.com/pixalynx/PSoXide-emulator", rev = "b27fff97dc9b265d776fb031ca0c920c0f243f95" }
 # Machine states: the core's own serde layout, encoded as PSoXide's save states are.
 postcard = { version = "1", features = ["alloc"] }
 # Sound out (CoreAudio, WASAPI, ALSA: Linux builds need libasound2-dev). 0.15 is what PSoXide's frontend uses.

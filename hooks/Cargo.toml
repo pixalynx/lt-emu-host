@@ -1,0 +1,18 @@
+[package]
+name = "lt-emu-hooks"
+description = "Code hooks on PSoXide's CPU: stop at a code address, read the game, then let the original run or return in its place"
+version = "0.1.0"
+edition = "2021"
+# Links PSoXide's core (GPL-2.0-or-later).
+license = "GPL-3.0-or-later"
+repository = "https://github.com/pixalynx/lt-emu-host"
+publish = false
+
+[dependencies]
+# The same core as the host program, which has `Cpu::set_code_hooks` (see host/Cargo.toml).
+emulator-core = { git = "https://github.com/pixalynx/PSoXide-emulator", rev = "b27fff97dc9b265d776fb031ca0c920c0f243f95" }
+
+[dev-dependencies]
+# The check's pictures.
+png = "0.18"
+psx-iso = { git = "https://github.com/pixalynx/PSoXide-emulator", rev = "b27fff97dc9b265d776fb031ca0c920c0f243f95" }

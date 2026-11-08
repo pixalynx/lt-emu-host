@@ -134,35 +134,55 @@ impl Overlay {
     }
 }
 
-/// The [`psx_iso::TrackSource`] the core's disc reads through.
+/// The [`psx_iso::TrackSource`] the core's disc reads through (its reads are counted).
 pub struct Source(pub Arc<Overlay>);
 
 impl psx_iso::TrackSource for Source {
     fn len(&self) -> u64 {
-        self.0.sectors as u64 * RAW_SECTOR as u64
+        self.0.byte_len()
     }
 
     fn read_at(&self, offset: u64, out: &mut [u8]) -> bool {
+        self.0.read_counted(offset, out, true)
+    }
+}
+
+impl Overlay {
+    /// The disc's length in bytes.
+    pub fn byte_len(&self) -> u64 {
+        self.sectors as u64 * RAW_SECTOR as u64
+    }
+
+    /// Reads raw image bytes from `offset` as the core would, without counting them as the
+    /// game's reads (a renderer reading assets off the same disc).
+    pub fn read(&self, offset: u64, out: &mut [u8]) -> bool {
+        self.read_counted(offset, out, false)
+    }
+
+    fn read_counted(&self, offset: u64, out: &mut [u8], count: bool) -> bool {
         let end = offset + out.len() as u64;
-        if end > self.len() {
+        if end > self.byte_len() {
             return false;
         }
-        let o = &self.0;
         let first = (offset / RAW_SECTOR as u64) as u32;
         let last = ((end.max(1) - 1) / RAW_SECTOR as u64) as u32;
-        let patches = o.patches.read().expect("overlay lock");
+        let patches = self.patches.read().expect("overlay lock");
         let mut written = 0usize;
         let mut sector = [0u8; RAW_SECTOR];
         for lba in first..=last {
             let start = if lba == first { (offset % RAW_SECTOR as u64) as usize } else { 0 };
             let take = (RAW_SECTOR - start).min(out.len() - written);
             let dst = &mut out[written..written + take];
-            o.reads.fetch_add(1, Ordering::Relaxed);
+            if count {
+                self.reads.fetch_add(1, Ordering::Relaxed);
+            }
             if let Some(raw) = patches.get(&lba) {
-                o.patched_reads.fetch_add(1, Ordering::Relaxed);
+                if count {
+                    self.patched_reads.fetch_add(1, Ordering::Relaxed);
+                }
                 dst.copy_from_slice(&raw[start..start + take]);
-            } else if lba < o.image.sectors() {
-                if !o.image.read_raw(lba, &mut sector) {
+            } else if lba < self.image.sectors() {
+                if !self.image.read_raw(lba, &mut sector) {
                     return false;
                 }
                 dst.copy_from_slice(&sector[start..start + take]);
@@ -206,6 +226,10 @@ mod tests {
         // Sector 4 is past the image: a patch appended it.
         assert_eq!(o.read_raw(4).unwrap()[0], 0xCD);
         assert_eq!(o.read_counts().1, 1);
+        // A quiet read sees the patch without counting.
+        let (mut one, counted) = ([0u8; 4], o.read_counts());
+        assert!(o.read(RAW_SECTOR as u64 * 2, &mut one));
+        assert_eq!((one[0], o.read_counts()), (0xAB, counted));
 
         // Clearing sector 2 puts the image's back; a short sector is refused.
         o.patch(Vec::new(), &[2]).unwrap();

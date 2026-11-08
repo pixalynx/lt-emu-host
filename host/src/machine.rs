@@ -1,5 +1,9 @@
 //! PSoXide's core behind a small API: boot a disc, run a frame with the pad held, read and write
 //! RAM, save and restore the machine. The core needs no BIOS: its HLE kernel boots the disc's EXE.
+//!
+//! How a frame runs is a [`Stepper`]'s: this program runs the core's own loop ([`Plain`]); a host
+//! that watches the game's code (Living Tool Remaster, with code hooks and a renderer) brings its
+//! own, and the rest of the protocol works the same.
 
 use std::sync::Arc;
 
@@ -17,6 +21,41 @@ const STEPS_PER_FRAME_CAP: u64 = 1_000_000;
 pub const CPU_HZ: f64 = 33_868_800.0;
 /// The core build machine states are good for (`Cargo.toml` pins this rev).
 pub const CORE: &str = "psoxide-d4d8006";
+
+/// Runs a frame on the core, and sees what else happens to the machine.
+pub trait Stepper {
+    /// Runs the core to the next VBlank with `pad` held (1 = pressed). `frame` is how many frames
+    /// ran before this one.
+    fn frame(&mut self, cpu: &mut Cpu, bus: &mut Bus, frame: u64, pad: u16) -> Result<(), String>;
+    /// A new machine (a disc opened, a reset, a state loaded) reading `disc`: anything set on the
+    /// old CPU (code hooks) is gone.
+    fn attach(&mut self, _cpu: &mut Cpu, _disc: &Arc<Overlay>) {}
+    /// The sectors laid over the disc changed ([`lt_emu_protocol::Request::Patch`]).
+    fn patched(&mut self) {}
+    /// [`lt_emu_protocol::Request::Focus`]: shows the host's own window. This program has none.
+    fn focus(&mut self) -> Result<(), String> {
+        Err("this emulator program has no window".into())
+    }
+    /// The program's name and version, for [`lt_emu_protocol::Answer::Hello`].
+    fn program(&self) -> String {
+        format!("lt-emu-host {}", env!("CARGO_PKG_VERSION"))
+    }
+}
+
+/// The core's own run loop, to the next VBlank.
+pub struct Plain;
+
+impl Stepper for Plain {
+    fn frame(&mut self, cpu: &mut Cpu, bus: &mut Bus, _frame: u64, pad: u16) -> Result<(), String> {
+        bus.set_port1_buttons(ButtonState::from_bits(pad));
+        let start = bus.irq().raise_counts()[0];
+        let (_, result) = cpu.run(bus, STEPS_PER_FRAME_CAP, u64::MAX, |bus| bus.irq().raise_counts()[0] != start);
+        result.map_err(|e| {
+            let c = cpu.cop0();
+            format!("{e} (pc={:#010x} epc={:#010x})", cpu.pc(), c[14])
+        })
+    }
+}
 
 pub struct Machine {
     cpu: Cpu,
@@ -67,22 +106,23 @@ impl Machine {
         self.bus.cycles()
     }
 
-    /// Runs to the next VBlank with `pad` held (1 = pressed). With `keep_audio` false the SPU's
-    /// output is dropped.
-    pub fn run_frame(&mut self, pad: u16, keep_audio: bool) -> Result<(), String> {
-        self.bus.set_port1_buttons(ButtonState::from_bits(pad));
-        let start = self.bus.irq().raise_counts()[0];
-        let (_, result) = self.cpu.run(&mut self.bus, STEPS_PER_FRAME_CAP, u64::MAX, |bus| bus.irq().raise_counts()[0] != start);
+    /// Runs to the next VBlank with `pad` held (1 = pressed), as `stepper` runs a frame. With
+    /// `keep_audio` false the SPU's output is dropped.
+    pub fn run_frame(&mut self, pad: u16, keep_audio: bool, stepper: &mut dyn Stepper) -> Result<(), String> {
+        let result = stepper.frame(&mut self.cpu, &mut self.bus, self.frame, pad);
         self.bus.run_spu_to_current_cycle();
         if !keep_audio {
             self.bus.spu.discard_audio();
         }
-        result.map_err(|e| {
-            let c = self.cpu.cop0();
-            format!("{e} (pc={:#010x} epc={:#010x})", self.cpu.pc(), c[14])
-        })?;
+        result?;
         self.frame += 1;
         Ok(())
+    }
+
+    /// Hands this machine's CPU and disc to `stepper` ([`Stepper::attach`]): after opening, a
+    /// reset and a state loaded.
+    pub fn attach(&mut self, stepper: &mut dyn Stepper) {
+        stepper.attach(&mut self.cpu, &self.overlay);
     }
 
     /// The SPU's stereo samples (44.1 kHz) since the last call.

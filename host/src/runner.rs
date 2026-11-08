@@ -10,7 +10,7 @@ use lt_emu_protocol::{Answer, Envelope, Event, FrameHeader, RamOp, Request, Stat
 
 use crate::audio::{self, AudioOut, Control};
 use crate::disc::{Image, Overlay};
-use crate::machine::{Machine, CORE, CPU_HZ};
+use crate::machine::{Machine, Stepper, CORE, CPU_HZ};
 
 /// A frame's wait is the emulated time it covered, bounded so a restore or a stall can't make the
 /// loop sleep long or spin.
@@ -137,6 +137,8 @@ struct Window {
 struct Runner {
     out: Out,
     machine: Option<Machine>,
+    /// How frames run ([`crate::machine::Plain`] here; Living Tool Remaster's draws natively too).
+    stepper: Box<dyn Stepper>,
     running: bool,
     halted: bool,
     pad: u16,
@@ -151,11 +153,14 @@ struct Runner {
     next: Instant,
 }
 
-pub fn run(rx: Receiver<Envelope>, out: Out) {
+/// Serves `rx`'s requests until [`Request::Shutdown`] or the pipe closes, running frames with
+/// `stepper` on the calling thread.
+pub fn run(rx: Receiver<Envelope>, out: Out, stepper: Box<dyn Stepper>) {
     crate::thread::interactive();
     let mut r = Runner {
         out,
         machine: None,
+        stepper,
         running: false,
         halted: false,
         pad: 0,
@@ -211,11 +216,17 @@ impl Runner {
                 if protocol != PROTOCOL {
                     Err(format!("this host speaks protocol {PROTOCOL}, not {protocol}"))
                 } else {
-                    Ok(Answer::Hello { protocol: PROTOCOL, core: CORE.into(), host: format!("lt-emu-host {}", env!("CARGO_PKG_VERSION")) })
+                    Ok(Answer::Hello { protocol: PROTOCOL, core: CORE.into(), host: self.stepper.program() })
                 }
             }
             Request::Open { image, sectors, patches, card } => self.open(&image, sectors, patches, card).map(|()| Answer::Ok),
-            Request::Patch { set, clear } => self.with(|m| m.overlay().patch(set.into_iter().map(|s| (s.lba, s.raw)).collect(), &clear).map(|()| Answer::Ok)),
+            Request::Patch { set, clear } => {
+                let r = self.with(|m| m.overlay().patch(set.into_iter().map(|s| (s.lba, s.raw)).collect(), &clear).map(|()| Answer::Ok));
+                if r.is_ok() {
+                    self.stepper.patched();
+                }
+                r
+            }
             Request::Run => {
                 self.running = true;
                 self.next = Instant::now();
@@ -228,6 +239,7 @@ impl Runner {
             Request::Reset => {
                 let r = self.with(|m| m.reset().map(|()| Answer::Ok));
                 if r.is_ok() {
+                    self.attach();
                     self.halted = false;
                     self.flush_sound();
                 }
@@ -255,6 +267,7 @@ impl Runner {
             Request::LoadState { frame, state } => {
                 let r = self.with(|m| m.load_state(frame, &state).map(|()| Answer::Ok));
                 if r.is_ok() {
+                    self.attach();
                     self.halted = false;
                     self.flush_sound();
                 }
@@ -276,6 +289,7 @@ impl Runner {
                 Ok(Answer::Ok)
             }
             Request::Diag => self.with(|m| Ok(Answer::Diag(m.diag()))),
+            Request::Focus => self.stepper.focus().map(|()| Answer::Ok),
             Request::Shutdown => {
                 let card = self.machine.as_mut().map(Machine::card).unwrap_or_default();
                 self.out.reply(id, Ok(Answer::Card(card)));
@@ -290,10 +304,18 @@ impl Runner {
         self.machine.as_mut().ok_or_else(not_open).and_then(f)
     }
 
+    /// The stepper takes the machine's new CPU (code hooks don't survive a new one).
+    fn attach(&mut self) {
+        if let Some(m) = self.machine.as_mut() {
+            m.attach(&mut *self.stepper);
+        }
+    }
+
     fn open(&mut self, image: &str, sectors: u32, patches: Vec<lt_emu_protocol::Sector>, card: Vec<u8>) -> Result<(), String> {
         let overlay = Arc::new(Overlay::new(Image::open(std::path::Path::new(image))?, sectors));
         overlay.patch(patches.into_iter().map(|s| (s.lba, s.raw)).collect(), &[])?;
         self.machine = Some(Machine::open(overlay, card)?);
+        self.attach();
         self.running = false;
         self.halted = false;
         self.press = None;
@@ -317,7 +339,7 @@ impl Runner {
         let t = Instant::now();
         let mut peak = 0u16;
         for &pad in pads {
-            let r = m.run_frame(pad, true);
+            let r = m.run_frame(pad, true, &mut *self.stepper);
             for (l, r) in m.drain_audio() {
                 peak = peak.max(l.unsigned_abs()).max(r.unsigned_abs());
             }
@@ -326,7 +348,7 @@ impl Runner {
                 self.out.event(Event::Halted { error: e.clone() });
                 return Err(e);
             }
-            if m.frame_count() % 30 == 0 {
+            if m.frame_count().is_multiple_of(30) {
                 if let Some(card) = m.take_card_write() {
                     self.out.event(Event::Card(card));
                 }
@@ -357,7 +379,7 @@ impl Runner {
             Some((bits, until, _)) if m.frame_count() < until => bits,
             _ => 0,
         };
-        if let Err(e) = m.run_frame(self.pad | pressed, true) {
+        if let Err(e) = m.run_frame(self.pad | pressed, true, &mut *self.stepper) {
             self.halted = true;
             self.out.event(Event::Halted { error: e });
             return;
@@ -373,13 +395,13 @@ impl Runner {
             }
         }
         // The game wrote its memory card: hand it over within half a second.
-        if frame % 30 == 0 {
+        if frame.is_multiple_of(30) {
             if let Some(card) = m.take_card_write() {
                 self.out.event(Event::Card(card));
             }
         }
         let mut copy_ms = 0.0;
-        if self.pictures_every > 0 && frame % u64::from(self.pictures_every) == 0 {
+        if self.pictures_every > 0 && frame.is_multiple_of(u64::from(self.pictures_every)) {
             let t1 = Instant::now();
             let p = m.picture();
             copy_ms = t1.elapsed().as_secs_f64() * 1000.0;

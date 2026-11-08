@@ -13,6 +13,10 @@
 //! The first request is [`Request::Hello`]; the host answers with its protocol version and the
 //! emulator core it runs. A request with id 0 wants no reply.
 //!
+//! Two programs speak it as hosts: `lt-emu-host` (no window: the application shows the pictures)
+//! and Living Tool Remaster's `lt-remaster --host`, which shows the game in its own window as well
+//! (the native view), and so also answers [`Request::Focus`] and sends [`Event::Closed`].
+//!
 //! MIT licensed: both sides use it.
 
 use std::io::{self, Read, Write};
@@ -20,8 +24,8 @@ use std::io::{self, Read, Write};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-/// Bumped on any change to the messages below.
-pub const PROTOCOL: u32 = 1;
+/// Bumped on any change to the messages below (2: [`Request::Focus`], [`Event::Closed`]).
+pub const PROTOCOL: u32 = 2;
 /// A raw CD sector: sync, header, subheader, data, EDC/ECC.
 pub const RAW_SECTOR: usize = 2352;
 pub const KIND_MESSAGE: u8 = 0;
@@ -85,6 +89,9 @@ pub enum Request {
     Diag,
     /// Answers with the final [`Answer::Card`], then exits.
     Shutdown,
+    /// Shows the host's own window and brings it to the front; a host without one answers with an
+    /// error.
+    Focus,
 }
 
 /// A sector laid over the image.
@@ -148,6 +155,9 @@ pub enum Event {
     /// The core failed and stopped running.
     Halted { error: String },
     Log(String),
+    /// The player closed the host's own window. The host keeps running (and hides the window)
+    /// until it gets [`Request::Shutdown`], so the application can take the machine back first.
+    Closed,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]

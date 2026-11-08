@@ -13,7 +13,7 @@ shows the pictures it sends back. The program itself knows nothing about Living 
 
 | Path | What | Licence |
 |---|---|---|
-| `host/` | The program: PSoXide's core, the disc (a raw image with patched sectors over it), the real-time loop, sound out (cpal), the pipe | GPL-3.0-or-later ([LICENSE](LICENSE)) |
+| `host/` | The program, and the same as a library (`lt_emu_host`): PSoXide's core, the disc (a raw image with patched sectors over it), the real-time loop, sound out (cpal), the pipe | GPL-3.0-or-later ([LICENSE](LICENSE)) |
 | `protocol/` | `lt-emu-protocol`: the messages and their framing, shared by the program and its applications | MIT ([protocol/LICENSE](protocol/LICENSE)) |
 | `hooks/` | `lt-emu-hooks`: code hooks on the core's CPU, a table of code addresses where a run stops so a handler can read the game, then let the original run or return in its place | GPL-3.0-or-later |
 
@@ -54,6 +54,17 @@ field's terrain:
 cargo run --release -p lt-emu-hooks --example hooks_check -- <disc.bin> <out dir> [identity|replace|all] [frames]
 ```
 
+## As a library
+
+`host/` is also the `lt_emu_host` library, for a program that hosts the game itself and speaks the
+same protocol: `protocol_out()` takes stdout first thing (see below), and `serve(out, stepper,
+events)` runs the whole server on the calling thread until `Shutdown` or a closed pipe. A
+`Stepper` runs each frame on the core (`Plain`: the core's own loop, what this program uses), is
+handed each new CPU and disc (`attach`: after `Open`, `Reset` and `LoadState`, which replace the
+CPU), hears of `Patch`es, answers `Focus` and names the program in `Hello`. Living Tool Remaster
+(`lt-remaster --host`) serves Living Tool's Play screen this way with code hooks and a native
+renderer in its stepper, and its own window.
+
 ## The protocol
 
 The application writes requests to the program's stdin and reads replies, events and pictures
@@ -77,9 +88,12 @@ the reply carries the same id; id 0 wants no reply. `protocol/src/lib.rs` docume
 | `Audio` | Volume and mute |
 | `Diag` | Health counters |
 | `Shutdown` | Hands back the memory card and exits |
+| `Focus` | Shows the host's own window (protocol 2; this program has none and says so) |
 
 Events: `Stats` once a second, `Card` when the game writes its memory card, `Halted` when the
-core fails, `Log`. The program exits when its stdin closes.
+core fails, `Log`, and `Closed` when the player closes a host's own window (protocol 2: the host
+waits for `Shutdown`, so the application can take the machine back first). The program exits when
+its stdin closes.
 
 The core's HLE BIOS prints the game's TTY output to stdout; the program points that at stderr and
 keeps its own copy of stdout for the protocol.

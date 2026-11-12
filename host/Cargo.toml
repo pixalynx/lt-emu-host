@@ -1,7 +1,7 @@
 [package]
 name = "lt-emu-host"
 description = "A PlayStation emulator host program: PSoXide's core driven over a plain-data pipe protocol"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 # PSoXide is GPL-2.0-or-later; this program links it, so it is GPL too.
 license = "GPL-3.0-or-later"
